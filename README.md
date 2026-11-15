@@ -1,6 +1,6 @@
 # 二维码二进制提取转化器 · QR ⇄ Binary Converter
 
-**v1.2** · Windows 免安装 · 简体中文 / 繁體中文 / English · 非商业许可
+**V1.3.4** · Windows 免安装 · 简体中文 / 繁體中文 / English · 非商业许可
 
 [**简体中文**](#简体中文) ｜ [**English**](#english)
 
@@ -16,9 +16,10 @@
 一个免安装的 Windows 桌面小工具：**图片二维码 → 二进制数字 → 二维码图片**，也能**文字 → 二维码**。
 生成与导出全程用真实扫码引擎（zbar）自检，因此「扫不出」「扫出别的内容」这两类事故会在保存前被拦下来。
 
-- 版本：**v1.2**
+- 版本：**V1.3.4**
 - 作者：**D_Chuan**（原创算法与界面实现，联系方式 1710079261@qq.com）
-- 平台：Windows（单文件 exe，免安装）
+- 平台：Windows 已提供 x64 / x86 两份免安装单文件；源码已内置 Linux / macOS 分支（配置目录、字体、图标、DPI、窗口行为均按平台切换），
+  这两个平台需在对应系统上自行打包
 - 界面：简体中文 / 繁體中文 / English，运行时随时切换
 - 代码：Python 3 + tkinter + Pillow + pyzbar + qrcode
 - 许可：**源码可见 · 禁止商用 · 二创必须保留原创信息**（详见 [LICENSE](LICENSE)）
@@ -40,9 +41,23 @@
 | 复制 | 复制全部信息（含长、宽、位深、模块像素、总位数、0/1 矩阵）或只复制纯二进制 |
 | 导出 | 保存 TXT、保存 PNG，并在保存前先把尺寸调到"可解码"的档位 |
 | 网格叠加 | 左侧原图可叠加模块网格，肉眼核对采样是否对齐 |
+| 艺术化二维码 | 支持 QQ 群卡片那类"圆点模块 + 圆形/靶心定位图案 + 中间压 logo"的码：定位图案**全图自动扫描 + 模板核对**，不按固定位置、不套固定比例 |
+| 清空 | 「图片 → 二进制」面板一键复位（图片、结果、自检行、信息框） |
 
-示例：`1群二维码-边长12cm.png`（453×453 px、41×41 模块、11.05 px/模块）
+### V1.3.4 更新要点
+
+- **定位图案不再按固定位置扫描**：整图逐行扫出"暗-亮-暗-亮-暗"同心结构作为候选，再用方形模板与圆形/靶心模板核对（7×7 模块中心采样，吻合率 <0.7 丢弃）；三个图案用向量几何（两臂垂直、等长、右手系）选出，模块数与模块宽全部由图案中心推算。
+- **旋转补正改用扩展画布**：贴边码（二维码铺满图片）旋转时不再被裁掉定位图案的边角，±4°/-8° 从必失败变为 0.14 秒通过。
+- **源图解不出也能补正功能图案**：改用"补正前后两次重绘内容一致"自证，靶心式小众图案不再卡在"结构校验不通过"。
+- **新增「清空」按钮**（简体中文/繁體中文/English 三语）。
+- 压力测试（12 种退化 × 3 张样板）由 24/36（66.7%）提升到 **33/36（91.7%）**。
+
+示例 1：`1群二维码-边长12cm.png`（453×453 px、41×41 模块、11.05 px/模块）
 → 1681 位二进制 → 按 8 px/模块重绘 → 扫码结果与源图完全一致。
+
+示例 2：QQ 群加群卡片（502×649 px，圆点模块 + 圆形定位图案 + 中间 QQ 企鹅 logo）
+→ 81×81 模块、4.44 px/模块、定位图案吻合 100%、模块纯度 99.7%
+→ 重绘后扫码内容与源图完全一致（识别耗时约 0.3 秒）。
 
 ### 二、界面截图
 
@@ -54,15 +69,21 @@
 | --- | --- |
 | ![en](截图/ui_en.png) | ![lang](截图/lang_dialog.png) |
 
+QQ 群「艺术化」二维码（圆点模块 + 圆形定位图案 + 中间 logo）识别后的界面：
+
+![QQ 艺术化码](截图/ui_qq_art.png)
+
 ### 三、快速开始
 
-**方式 1：直接用成品**
+**方式 1：直接用成品**（按平台区分命名，同一份源码打出来的）
 
 ```
-成品\二维码二进制提取转化器.exe
+成品\QRBinaryConverter-V1.3.4-Windows-x64.exe    # 64 位 Windows
+成品\QRBinaryConverter-V1.3.4-Windows-x86.exe    # 32 位 Windows
 ```
 
-双击即可运行，无需安装 Python 或其他运行库（pyzbar 的 `libzbar-64.dll` 已打进包里）。
+双击即可运行，无需安装 Python 或其他运行库（pyzbar 的 `libzbar-64.dll` / `libzbar-32.dll` 已打进包里）。
+Linux / macOS 的源码分支已经写好，需要在对应平台上自行打包（见第八节目录结构与打包命令）。
 
 **方式 2：从源码运行**
 
@@ -75,13 +96,22 @@ python 源码\二维码二进制提取转化器.py
 
 ```powershell
 python -m PyInstaller --noconfirm --onefile --noconsole `
-  --name "二维码二进制提取转化器" `
-  --icon 源码\app.ico --add-data "源码\app.ico;." `
+  --name "QRBinaryConverter-V1.3.4-Windows-x64" `
+  --icon 源码\app.ico --add-data "源码\app.ico;." --add-data "源码\app.png;." `
   --add-binary "<你的 site-packages>\pyzbar\libzbar-64.dll;pyzbar" `
   --exclude-module numpy `
   --distpath 成品 --workpath $env:TEMP\qrbuild --specpath $env:TEMP\qrbuild `
   源码\二维码二进制提取转化器.py
 ```
+
+32 位版本要用 32 位 Python 打包，并把 `libzbar-32.dll` 与 `libiconv-2.dll` **两个都**加进去（少一个会加载失败）：
+
+```powershell
+--add-binary "<32 位 site-packages>\pyzbar\libzbar-32.dll;pyzbar" `
+--add-binary "<32 位 site-packages>\pyzbar\libiconv-2.dll;pyzbar"
+```
+
+Linux 先装系统库 `sudo apt install libzbar0`，macOS 需在目标架构机器上打包并把 `libzbar.dylib` 放进包里。
 
 > 两个坑：`--collect-all pyzbar` 会连带把 pyzbar 的 tests 目录和 numpy 一起打进包，体积从 20.7 MB 涨到 69 MB；`--exclude-module numpy` 可以避免这一点。
 
@@ -134,7 +164,7 @@ python -m PyInstaller --noconfirm --onefile --noconsole `
 打包后如果怀疑扫码引擎没被正确打进去，可以不走界面直接验证：
 
 ```powershell
-成品\二维码二进制提取转化器.exe --selftest $env:TEMP\selftest.txt
+成品\QRBinaryConverter-V1.3.4-Windows-x64.exe --selftest $env:TEMP\selftest.txt
 ```
 
 正常输出：
@@ -148,21 +178,43 @@ decode_ok=True
 match=True
 ```
 
+还可以直接把一张图片丢进识别链路，看它是怎么被拆开的（排查"某张图为什么没识别出来"时最有用）：
+
+```powershell
+成品\QRBinaryConverter-V1.3.4-Windows-x64.exe --detect "QQ群码.png" $env:TEMP\det.txt
+```
+
+```
+IMAGE=QQ群码.png
+SIZE=502 x 649
+N=81
+MODULE_PX=4.444
+FINDER=1.0000
+PURITY=0.9973
+ARTISTIC=True
+STRUCTURE_OK=True problems=[]
+DESC=版本 16 · 81×81 模块
+REDRAW_DECODE=True
+SOURCE_DECODE=True
+MATCH=True
+```
+
 ### 八、目录结构
 
 ```
 二维码二进制提取转化器\
 ├─ 源码\
-│   ├─ 二维码二进制提取转化器.py   # 单文件源码（算法 + 界面 + 三语词表）
-│   ├─ app.ico / app.png          # 应用图标
+│   ├─ 二维码二进制提取转化器.py   # 单文件源码（算法 + 界面 + 三语词表 + 跨平台分支）
+│   ├─ app.ico / app.png          # 应用图标（Windows 用 .ico，macOS/Linux 用 .png）
 ├─ 成品\
-│   └─ 二维码二进制提取转化器.exe   # v1.2 免安装单文件
+│   ├─ QRBinaryConverter-V1.3.4-Windows-x64.exe   # 64 位免安装单文件
+│   └─ QRBinaryConverter-V1.3.4-Windows-x86.exe   # 32 位免安装单文件
 ├─ 开源\
 │   ├─ README.md                  # 本文件（中英双语）
 │   ├─ LICENSE                    # 非商业许可（禁止商用 + 强制署名）
-│   ├─ 发布说明-v1.2.md            # 本版发行公告（中英双语）
-│   ├─ 二维码二进制提取转化器.py     # 与 源码\ 同一份代码
-│   ├─ 二维码二进制提取转化器.exe    # 已打包成品（20.73 MB，免安装）
+│   ├─ 发布说明-V1.3.4.md            # 本版发行公告（中英双语）
+│   ├─ 二维码二进制提取转化器.py     # 与 源码\ 同一份代码（字节一致）
+│   ├─ QRBinaryConverter-V1.3.4-Windows-x64.exe  # 已打包成品（免安装）
 │   ├─ app.ico                    # 图标（打包时用）
 │   └─ 截图\                      # README 用到的界面截图
 └─ 使用说明.txt
@@ -171,7 +223,8 @@ match=True
 ### 九、已知限制
 
 - 只支持 QR Code（不支持 DataMatrix、Aztec、PDF417 等）。
-- 识别要求二维码是"干净的二值图"：旋转、透视、模糊、强反光、彩色底纹的截图可能识别失败；建议用原图或无损截图。反相（黑白颠倒）的图会自动再试一次。
+- 识别要求二维码是"干净的二值图"：**严重透视、斜拍、强反光、彩色底纹**的截图可能识别失败；建议用原图或无损截图。反相（黑白颠倒）的图会自动再试一次。
+- 圆点模块 / 圆形定位图案 / 中间压 logo 的"艺术化"二维码**已支持**（先扫定位图案定网格，再按规范补正功能图案，并要求补正后仍能扫出与源图一致的内容）；但同样不做透视畸变校正，斜拍的这类图仍可能失败，失败时自检会明确报红，不会给出"看着对、其实错"的矩阵。
 - 导出分辨率受限于"每模块整数像素"，最终图片会比原图大或小，但内容与矩阵严格一致。
 - 2 px/模块 时 zbar 仍可解，1 px/模块 不可解，所以导出下限锁定 4 px/模块。
 - 界面用 tkinter 实现，深色皮肤是自绘的；`tk.Scale` 在深色主题下不可用，滑杆为 Canvas 自绘组件。
@@ -219,9 +272,11 @@ A portable Windows desktop tool that converts **QR image → binary matrix → Q
 **text → QR image**. Every generated or redrawn matrix is verified with a real scanner engine (zbar),
 so "the code won't scan" and "it scans different content" are caught *before* you save.
 
-- Version: **v1.2**
+- Version: **V1.3.4**
 - Author: **D_Chuan** (original algorithm and UI implementation; contact 1710079261@qq.com)
-- Platform: Windows, single-file portable exe, no installation
+- Platform: Windows ships as two portable single files (x64 / x86); the source already contains
+  Linux / macOS branches (config dir, fonts, icon, DPI and window behaviour all switch by platform),
+  and those two builds must be produced on their own systems
 - UI languages: Simplified Chinese / Traditional Chinese / US English, switchable at runtime
 - Stack: Python 3 + tkinter + Pillow + pyzbar + qrcode
 - License: **source-available, non-commercial, attribution required** (see [LICENSE](LICENSE))
@@ -244,9 +299,30 @@ so "the code won't scan" and "it scans different content" are caught *before* yo
 | Copy | Copy the full info block (cols, rows, bit depth, module size, total bits, matrix) or just the raw bits |
 | Export | Save TXT / save PNG, with the size bumped to a decodable px/module setting before writing |
 | Grid overlay | Overlay a module grid on the source preview to eyeball whether sampling is aligned |
+| Stylised QR | Handles QQ-group-card style codes (dot modules, round/bullseye finder "eyes", logo in the centre): finder patterns are **auto-scanned across the whole image and checked against templates** — no fixed positions, no fixed ratios |
+| Clear | A single button that resets the Image → Binary panel (image, result, self-check line, info box) |
 
-Example: `1群二维码-边长12cm.png` (453×453 px, 41×41 modules, 11.05 px/module)
+### What's new in V1.3.4
+
+- **Finder patterns are no longer searched at fixed positions**: every row is scanned for
+  dark-light-dark-light-dark concentric runs, and each candidate is verified against a square
+  template and a circular/bullseye template (7×7 module-centre sampling; below 0.7 it is dropped).
+  The triple is chosen by vector geometry (perpendicular, equal-length arms, right-handed), and
+  both the module count and module width are derived from the eye centres.
+- **Rotation compensation now expands the canvas**, so a code that fills the image no longer loses
+  the corners of its eyes; ±4° / -8° went from "always fails" to passing in 0.14 s.
+- **Function patterns are normalised even when the source image itself cannot be decoded**, by
+  proving "decoded before" equals "decoded after" normalisation — bullseye-style eyes no longer
+  get stuck on "structure check failed".
+- **New "Clear" button** (Simplified Chinese / Traditional Chinese / English).
+- Stress suite (12 degradations × 3 samples) improved from 24/36 (66.7%) to **33/36 (91.7%)**.
+
+Example 1: `1群二维码-边长12cm.png` (453×453 px, 41×41 modules, 11.05 px/module)
 → 1681 bits → redrawn at 8 px/module → decodes to exactly the same content as the source image.
+
+Example 2: a QQ group-join card (502×649 px, dot modules, round finder patterns, QQ penguin logo
+in the middle) → 81×81 modules, 4.44 px/module, finder match 100%, module purity 99.7% → the
+redrawn code decodes to exactly the same content as the source image (about 0.3 s).
 
 ### 2. Screenshots
 
@@ -258,15 +334,22 @@ Example: `1群二维码-边长12cm.png` (453×453 px, 41×41 modules, 11.05 px/m
 | --- | --- |
 | ![en](截图/ui_en.png) | ![lang](截图/lang_dialog.png) |
 
+A QQ group-join stylised code (dot modules, round finder eyes, centred logo) after detection:
+
+![QQ stylised QR](截图/ui_qq_art.png)
+
 ### 3. Quick start
 
-**Option 1 — use the built exe**
+**Option 1 — use the built exe** (one build per platform, distinguished by file name)
 
 ```
-成品\二维码二进制提取转化器.exe
+成品\QRBinaryConverter-V1.3.4-Windows-x64.exe    # 64-bit Windows
+成品\QRBinaryConverter-V1.3.4-Windows-x86.exe    # 32-bit Windows
 ```
 
-Double-click; no Python or runtime needed (`libzbar-64.dll` is bundled).
+Double-click; no Python or runtime needed (`libzbar-64.dll` / `libzbar-32.dll` is bundled).
+The Linux / macOS source branches are already in place, but those builds must be produced on the
+matching platform (see section 8).
 
 **Option 2 — run from source**
 
@@ -279,13 +362,24 @@ python 源码\二维码二进制提取转化器.py
 
 ```powershell
 python -m PyInstaller --noconfirm --onefile --noconsole `
-  --name "二维码二进制提取转化器" `
-  --icon 源码\app.ico --add-data "源码\app.ico;." `
+  --name "QRBinaryConverter-V1.3.4-Windows-x64" `
+  --icon 源码\app.ico --add-data "源码\app.ico;." --add-data "源码\app.png;." `
   --add-binary "<your site-packages>\pyzbar\libzbar-64.dll;pyzbar" `
   --exclude-module numpy `
   --distpath 成品 --workpath $env:TEMP\qrbuild --specpath $env:TEMP\qrbuild `
   源码\二维码二进制提取转化器.py
 ```
+
+For the 32-bit build use a 32-bit Python and bundle **both** `libzbar-32.dll` and
+`libiconv-2.dll` (missing either one makes the scanner fail to load):
+
+```powershell
+--add-binary "<32-bit site-packages>\pyzbar\libzbar-32.dll;pyzbar" `
+--add-binary "<32-bit site-packages>\pyzbar\libiconv-2.dll;pyzbar"
+```
+
+On Linux install the system library first (`sudo apt install libzbar0`); on macOS build on the
+target architecture and ship `libzbar.dylib` inside the bundle.
 
 > Two pitfalls: `--collect-all pyzbar` drags in pyzbar's tests folder and numpy, growing the
 > package from 20.7 MB to 69 MB; `--exclude-module numpy` avoids that.
@@ -351,7 +445,7 @@ contents must match.
 If you suspect the scanner engine did not get bundled, verify without the GUI:
 
 ```powershell
-成品\二维码二进制提取转化器.exe --selftest $env:TEMP\selftest.txt
+成品\QRBinaryConverter-V1.3.4-Windows-x64.exe --selftest $env:TEMP\selftest.txt
 ```
 
 Expected:
@@ -365,21 +459,44 @@ decode_ok=True
 match=True
 ```
 
+You can also push a single image through the detection pipeline — the fastest way to find out why
+one particular image fails:
+
+```powershell
+成品\QRBinaryConverter-V1.3.4-Windows-x64.exe --detect "qq-card.png" $env:TEMP\det.txt
+```
+
+```
+IMAGE=qq-card.png
+SIZE=502 x 649
+N=81
+MODULE_PX=4.444
+FINDER=1.0000
+PURITY=0.9973
+ARTISTIC=True
+STRUCTURE_OK=True problems=[]
+DESC=version 16 · 81×81 modules
+REDRAW_DECODE=True
+SOURCE_DECODE=True
+MATCH=True
+```
+
 ### 8. Project layout
 
 ```
 二维码二进制提取转化器\
 ├─ 源码\                          # source
-│   ├─ 二维码二进制提取转化器.py     # single-file source (algorithms + UI + i18n)
-│   ├─ app.ico / app.png          # icons
+│   ├─ 二维码二进制提取转化器.py     # single-file source (algorithms + UI + i18n + platform branches)
+│   ├─ app.ico / app.png          # icons (.ico for Windows, .png for macOS/Linux)
 ├─ 成品\                          # build output
-│   └─ 二维码二进制提取转化器.exe     # v1.2 portable single file
+│   ├─ QRBinaryConverter-V1.3.4-Windows-x64.exe   # 64-bit portable single file
+│   └─ QRBinaryConverter-V1.3.4-Windows-x86.exe   # 32-bit portable single file
 ├─ 开源\                          # public release folder
 │   ├─ README.md                  # this file (bilingual)
 │   ├─ LICENSE                    # non-commercial license, attribution required
-│   ├─ 发布说明-v1.2.md            # release notes for this version (bilingual)
-│   ├─ 二维码二进制提取转化器.py     # identical copy of the source
-│   ├─ 二维码二进制提取转化器.exe    # the packaged build (20.73 MB, portable)
+│   ├─ 发布说明-V1.3.4.md            # release notes for this version (bilingual)
+│   ├─ 二维码二进制提取转化器.py     # byte-identical copy of the source
+│   ├─ QRBinaryConverter-V1.3.4-Windows-x64.exe  # the packaged build (portable)
 │   ├─ app.ico                    # icon used when packaging
 │   └─ 截图\                      # screenshots used above
 └─ 使用说明.txt                    # end-user manual (Chinese)
@@ -388,9 +505,14 @@ match=True
 ### 9. Known limitations
 
 - QR Code only (no DataMatrix, Aztec, PDF417).
-- Detection expects a clean binary image: rotated, perspective-distorted, blurry, glare-covered or
+- Detection expects a clean binary image: heavily perspective-distorted, blurry, glare-covered or
   patterned-background screenshots may fail. Use the original image when possible. Inverted
   (black-on-white flipped) images are retried once automatically.
+- Stylised codes — dot modules, round finder "eyes", a logo in the middle — **are supported** (the
+  grid comes from the finder patterns, the function patterns are rebuilt to spec, and the rebuild is
+  only accepted when it still decodes to the source content). Perspective distortion is still not
+  corrected, so an obliquely photographed stylised code can fail; when it does, the self-check line
+  turns red instead of handing you a matrix that looks right but is not.
 - Export resolution is limited to integer pixels per module; the output may be larger or smaller
   than the original, but the content matches the matrix exactly.
 - zbar still decodes at 2 px/module but not at 1 px/module, hence the 4 px/module export floor.

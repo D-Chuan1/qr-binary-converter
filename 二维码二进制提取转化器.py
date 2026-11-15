@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  二维码二进制提取转化器 · QR ⇄ Binary Converter    v1.2
+#  二维码二进制提取转化器 · QR ⇄ Binary Converter    V1.3.4
 #  -------------------------------------------------------------------------
 #  原始作者 / Original author : D_Chuan
 #  版权     / Copyright       : (c) 2026 D_Chuan. All Rights Reserved.
@@ -15,7 +15,7 @@
 # =============================================================================
 
 """
-二维码二进制提取转化器  v1.2
+二维码二进制提取转化器  V1.3.4
 -----------------------------------------
 双向转换：
     图片二维码  ->  二进制矩阵（1=黑模块 0=白模块），并输出长/宽/高/位数等信息
@@ -32,7 +32,7 @@ import math
 import tkinter as tk
 from tkinter import filedialog, messagebox, font as tkfont
 
-from PIL import Image, ImageDraw, ImageGrab, ImageOps, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageGrab, ImageOps, ImageTk
 
 # 真实扫码引擎（zbar）：用来给每一张生成的二维码做"能不能扫"的硬校验
 try:
@@ -54,7 +54,24 @@ except Exception:
     ERROR_CORRECT_L = ERROR_CORRECT_M = ERROR_CORRECT_Q = ERROR_CORRECT_H = None
 
 APP_TITLE = "二维码二进制提取转化器"
-APP_VERSION = "v1.2"
+APP_VERSION = "V1.3.4"
+APP_ID = "QRBinaryConverter"
+
+# 运行平台：windows / macos / linux。配置目录、图标格式、字体候选、窗口图标方式都按它分支。
+if sys.platform.startswith("win"):
+    PLATFORM = "windows"
+elif sys.platform == "darwin":
+    PLATFORM = "macos"
+else:
+    PLATFORM = "linux"
+
+# 三平台的发行文件名（发布时按这个命名区分版本）
+RELEASE_NAMES = {
+    "windows": "QRBinaryConverter-%s-Windows-x64.exe" % APP_VERSION,
+    "linux": "QRBinaryConverter-%s-Linux-x86_64" % APP_VERSION,
+    "macos": "QRBinaryConverter-%s-macOS-%s" % (APP_VERSION, "arm64"),
+}
+
 EC_CHOICES = ("L", "M", "Q", "H")
 
 # ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
@@ -81,6 +98,7 @@ STRINGS = {
     "copy_bits": ("复制纯二进制", "複製純二進位", "Copy Bits Only"),
     "save_txt": ("保存为 TXT", "儲存為 TXT", "Save as TXT"),
     "to_right": ("填入右侧", "填入右側", "Send Right"),
+    "clear_left": ("清空", "清空", "Clear"),
 
     "tab_bits": ("二进制数字", "二進位數字", "Binary"),
     "tab_text": ("文字内容", "文字內容", "Text"),
@@ -148,6 +166,9 @@ STRINGS = {
                       "Scan check: passed · decodable · \"{c}\""),
     "check_small_px": (" ｜{px}px/模块 太小，保存时自动放大", " ｜{px}px/模組 太小，儲存時自動放大",
                        "  | {px}px/module is too small; saving will upscale it"),
+    "left_check_artistic": ("扫码自检：通过 · 艺术化二维码（圆点/圆形定位）已按规范补正功能图案 · {c}",
+                            "掃碼自檢：通過 · 藝術化二維碼（圓點/圓形定位）已依規範補正功能圖案 · {c}",
+                            "Scan check: passed · artistic QR (dots / round eyes) normalised to spec · {c}"),
     "left_check_same": ("扫码自检：通过 · 与源图内容一致 · {c}",
                         "掃碼自檢：通過 · 與來源圖內容一致 · {c}",
                         "Scan check: passed · matches the source image · {c}"),
@@ -276,9 +297,21 @@ def t_(lang, key, **kw):
     return text
 
 
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def config_dir():
+    """按平台取配置目录：Windows 用 %APPDATA%，macOS 用 ~/Library/Application Support，
+    Linux 用 $XDG_CONFIG_HOME（缺省 ~/.config）。"""
+    if PLATFORM == "windows":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, APP_ID)
+    if PLATFORM == "macos":
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", APP_ID)
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "qr-binary-converter")
+
+
 def config_path():
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    return os.path.join(base, "QRBinaryConverter", "config.json")
+    return os.path.join(config_dir(), "config.json")
 
 
 def load_lang():
@@ -583,11 +616,433 @@ def _score_candidate(flat, side, thr, n):
 
 
 # ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _row_runs(flat, w, y, thr):
+    """第 y 行的同色段：[(起点x, 长度, 是否暗)]"""
+    runs = []
+    line = y * w
+    start = 0
+    cur = flat[line] < thr
+    for x in range(1, w):
+        v = flat[line + x] < thr
+        if v != cur:
+            runs.append((start, x - start, cur))
+            start = x
+            cur = v
+    runs.append((start, w - start, cur))
+    return runs
+
+
+def _col_runs(flat, w, h, x, thr):
+    """第 x 列的同色段：[(起点y, 长度, 是否暗)]"""
+    runs = []
+    start = 0
+    cur = flat[x] < thr
+    for y in range(1, h):
+        v = flat[y * w + x] < thr
+        if v != cur:
+            runs.append((start, y - start, cur))
+            start = y
+            cur = v
+    runs.append((start, h - start, cur))
+    return runs
+
+
+def _ratio_hit(runs, i, m):
+    """runs[i:i+5] 是否满足 1:1:3:1:1（首段为暗段）。m 为单模块像素估计。"""
+    if i + 5 > len(runs):
+        return False
+    tol = m * 0.62
+    l0, l1, l2, l3, l4 = [r[1] for r in runs[i:i + 5]]
+    return (abs(l0 - m) <= tol and abs(l1 - m) <= tol and
+            abs(l2 - 3.0 * m) <= 3.0 * tol and
+            abs(l3 - m) <= tol and abs(l4 - m) <= tol)
+
+
+def _finder_scan(gray, thr, max_side=1400):
+    """扫描 1:1:3:1:1 的定位图案，返回 [(cx, cy, module_px, x0, y0, x1, y1)]。
+    走的是穿过图案中心的那一行/列，所以方块、圆点、空心圆圈的定位图案都能命中；
+    因此整张图里即使有企鹅、标题文字等暗色装饰，也不会把网格算歪。
+    x0/y0/x1/y1 是图案最外圈黑边的边界，用来精确反推模块宽与原点。"""
+    w, h = gray.size
+    scale = 1.0
+    if max(w, h) > max_side:
+        scale = max_side / float(max(w, h))
+        gray = gray.resize((max(21, int(w * scale)), max(21, int(h * scale))), Image.BILINEAR)
+        w, h = gray.size
+    flat = gray.tobytes()
+    pts = []
+    for y in range(h):
+        runs = _row_runs(flat, w, y, thr)
+        for i in range(len(runs) - 4):
+            if not runs[i][2]:
+                continue
+            m = sum(r[1] for r in runs[i:i + 5]) / 7.0
+            if m < 1.2 or m > w / 8.0:
+                continue
+            if not _ratio_hit(runs, i, m):
+                continue
+            cx = runs[i + 2][0] + runs[i + 2][1] / 2.0
+            col = _col_runs(flat, w, h, int(round(cx)), thr)
+            for j in range(len(col) - 4):
+                if not col[j][2]:
+                    continue
+                # 列向复核不要求"正好同一像素列"：图被转了几度时，图案中心会偏几像素，
+                # 只要这一竖条命中 1:1:3:1:1 且中心高度和这一行的中心对得上就算数。
+                mv = sum(r[1] for r in col[j:j + 5]) / 7.0
+                if mv < 1.2:
+                    continue
+                cy = col[j + 2][0] + col[j + 2][1] / 2.0
+                if abs(cy - y) > 1.6 * max(m, mv):
+                    continue
+                if _ratio_hit(col, j, mv) and 0.55 <= mv / m <= 1.8:
+                    pts.append((cx, cy, (m + mv) / 2.0,
+                                runs[i][0], col[j][0],
+                                runs[i + 4][0] + runs[i + 4][1],
+                                col[j + 4][0] + col[j + 4][1]))
+    if scale != 1.0:
+        pts = [(x / scale, y / scale, mm / scale, a / scale, b / scale, c / scale, d / scale)
+               for (x, y, mm, a, b, c, d) in pts]
+    return pts
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _cluster_finders(pts):
+    """把同一图案上命中的多个点合并成中心点（同一图案会被多行同时命中）。"""
+    groups = []
+    for (x, y, m, x0, y0, x1, y1) in pts:
+        hit = None
+        for g in groups:
+            if (abs(g["x"] - x) <= max(3.0 * g["m"], 6.0) and
+                    abs(g["y"] - y) <= max(3.0 * g["m"], 6.0)):
+                hit = g
+                break
+        if hit is None:
+            groups.append({"x": x, "y": y, "m": m, "v": 1,
+                           "x0": x0, "y0": y0, "x1": x1, "y1": y1})
+        else:
+            hit["v"] += 1
+            for k, v in (("x", x), ("y", y), ("m", m),
+                         ("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)):
+                hit[k] = (hit[k] * (hit["v"] - 1) + v) / hit["v"]
+    return [g for g in groups if g["v"] >= 2]
+
+
+def _pick_triple(groups):
+    """挑出"左上 + 右上 + 左下"三个定位图案。
+    判据用向量而不是行/列对齐：两条臂（左上→右上、左上→左下）应当近似垂直、长度相近、
+    且方向满足右手系（叉积 > 0）。这样码被拍歪、轻透视时依然成立，
+    又不会把"随便三个对角的图案"选进来。"""
+    best = None
+    gs = sorted(groups, key=lambda g: -g["v"])[:16]
+    for a in gs:
+        for b in gs:
+            if b is a:
+                continue
+            ux = b["x"] - a["x"]
+            uy = b["y"] - a["y"]
+            if ux * ux + uy * uy < 1.0:
+                continue
+            for c in gs:
+                if c is a or c is b:
+                    continue
+                vx = c["x"] - a["x"]
+                vy = c["y"] - a["y"]
+                lu = math.hypot(ux, uy)
+                lv = math.hypot(vx, vy)
+                if lu < 1.0 or lv < 1.0:
+                    continue
+                m = (a["m"] + b["m"] + c["m"]) / 3.0
+                # 模块宽要接近
+                if abs(a["m"] - m) > 0.35 * m or abs(b["m"] - m) > 0.35 * m or abs(c["m"] - m) > 0.35 * m:
+                    continue
+                # 两臂长度差
+                if abs(lu - lv) / float(max(lu, lv)) > 0.45:
+                    continue
+                # 近似垂直（|cos| 小），且方向为右手系（叉积 > 0）
+                cosv = abs(ux * vx + uy * vy) / (lu * lv)
+                if cosv > 0.30:
+                    continue
+                if ux * vy - uy * vx <= 0:
+                    continue
+                # 图案模板吻合度也应该都不错
+                shape_pen = 0.0
+                for g in (a, b, c):
+                    shape_pen += (1.0 - g.get("shape", 1.0))
+                cost = cosv * 2.0 + abs(lu - lv) / float(max(lu, lv)) + shape_pen
+                if best is None or cost < best[0]:
+                    best = (cost, a, b, c)
+    return None if best is None else best[1:]
+
+
+def _sample_center(flat, side, n, thr):
+    """只在模块中心取样：圆点式、圆角式模块的中心一定是模块本来的颜色，
+    比"整格平均"稳得多。纯度用中心与四邻的一致性来估计。"""
+    m = side / float(n)
+    bits = []
+    conf_sum = 0.0
+    agree = 0.0
+    probes = ((0.32, 0.5), (0.68, 0.5), (0.5, 0.32), (0.5, 0.68))
+    for r in range(n):
+        row = []
+        for c in range(n):
+            cx = min(side - 1, max(0, int((c + 0.5) * m)))
+            cy = min(side - 1, max(0, int((r + 0.5) * m)))
+            v = flat[cy * side + cx]
+            dark = 1 if v < thr else 0
+            row.append(dark)
+            conf_sum += abs(v - 127.5) / 127.5
+            same = 0
+            for (px_, py_) in probes:
+                xx = min(side - 1, max(0, int((c + px_) * m)))
+                yy = min(side - 1, max(0, int((r + py_) * m)))
+                same += 1 if (flat[yy * side + xx] < thr) == bool(dark) else 0
+            agree += same / 4.0
+        bits.append(row)
+    return bits, conf_sum / float(n * n), agree / float(n * n)
+
+
+def _pattern_extent(flat, w, h, cx, cy, m, thr, dx, dy):
+    """从定位图案中心沿 (dx,dy) 走，返回最外圈黑边的最后一个像素坐标。
+    注意不能在第一段不是黑的间隙就停（那是"核心 3×3"和"外环"之间的白环），
+    必须走过两段黑、遇到超过 1.3 模块的空白才停，这样拿到的才是图案的外边界。"""
+    x, y = cx, cy
+    last = None
+    dark_seen = 0
+    light_run = 0
+    in_dark = False
+    for _ in range(int(5.4 * m) + 2):
+        xi = int(round(x))
+        yi = int(round(y))
+        if xi < 0 or yi < 0 or xi >= w or yi >= h:
+            break
+        if flat[yi * w + xi] < thr:
+            if not in_dark:
+                dark_seen += 1
+                in_dark = True
+            light_run = 0
+            last = (xi, yi)
+        else:
+            in_dark = False
+            light_run += 1
+            if dark_seen >= 2 and light_run > 1.3 * m:
+                break
+        x += dx
+        y += dy
+    return last
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _affine_sample(gray, a, b, c, n, thr, ox=0.0, oy=0.0, s=1.0):
+    """用三个定位图案的中心解一个仿射变换，把"模块坐标"直接映射到像素坐标后逐模块采样。
+    仿射能同时吸收旋转、缩放与剪切（斜拍/轻透视的主要成分），比轴对齐裁切稳得多。
+    a/b/c 是左上、右上、左下的图案中心；它们在模块坐标里分别是 (3.5,3.5)、(n-3.5,3.5)、(3.5,n-3.5)。"""
+    k = float(n - 7)
+    ux = (b["x"] - a["x"]) / k * s
+    uy = (b["y"] - a["y"]) / k * s
+    vx = (c["x"] - a["x"]) / k * s
+    vy = (c["y"] - a["y"]) / k * s
+    ax = a["x"] + ox * ux + oy * vx
+    ay = a["y"] + ox * uy + oy * vy
+
+    def coef(dx, dy):
+        return (ux, vx, ax + (dx - 3.5) * ux + (dy - 3.5) * vx,
+                uy, vy, ay + (dx - 3.5) * uy + (dy - 3.5) * vy)
+
+    def sample(dx, dy):
+        img = gray.transform((n, n), Image.AFFINE, coef(dx, dy),
+                             resample=Image.BILINEAR, fill=255)
+        return img.tobytes()
+
+    center = sample(0.0, 0.0)
+    bits = []
+    conf = 0.0
+    for r in range(n):
+        row = []
+        base = r * n
+        for c in range(n):
+            v = center[base + c]
+            row.append(1 if v < thr else 0)
+            conf += abs(v - thr) / 255.0
+        bits.append(row)
+
+    # 纯度：再取两个偏移 0.3 模块的采样，看是否与中心一致
+    p1 = sample(0.30, 0.0)
+    p2 = sample(0.0, 0.30)
+    agree = 0.0
+    for r in range(n):
+        base = r * n
+        for c in range(n):
+            d = bits[r][c]
+            i = base + c
+            agree += 1.0 if (p1[i] < thr) == bool(d) else 0.0
+            agree += 1.0 if (p2[i] < thr) == bool(d) else 0.0
+    return bits, conf / float(n * n), agree / float(2 * n * n)
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _sample_affine(gray, a, b, c, n, thr):
+    """在原点偏移、轻微缩放上做小范围搜索，取定位图案吻合度 + 纯度最高的那一组。"""
+    best = None
+    for s in (1.0, 0.99, 1.01):
+        for ox in (0.0, -0.25, 0.25):
+            for oy in (0.0, -0.25, 0.25):
+                bits, conf, purity = _affine_sample(gray, a, b, c, n, thr, ox, oy, s)
+                fr = _finder_ratio(bits, n)
+                score = fr * 2.0 + purity * 4.0 + conf * 0.6
+                if best is None or score > best[0]:
+                    best = (score, bits, conf, purity, fr, ox, oy, s)
+    return best
+
+
+def _finder_shape(flat, w, h, cx, cy, m, thr):
+    """核对候选是不是真的定位图案：把 7×7 的模块中心采出来，分别跟"方形图案"
+    和"圆形（空心圈）图案"两套模板比，取更吻合的那套。
+    返回 (吻合率, 模块宽修正系数)；吻合率低于 0.7 的候选直接丢掉，
+    这样模糊、旋转后数据区偶然凑出的 1:1:3:1:1 不会被当成图案。"""
+    best = (0.0, 1.0)
+    for s in (0.86, 0.90, 0.94, 0.98, 1.0, 1.02, 1.06, 1.10, 1.16):
+        mm = m * s
+        agree_sq = 0
+        agree_rd = 0
+        for i in range(7):
+            for j in range(7):
+                x = int(round(cx + (j - 3) * mm))
+                y = int(round(cy + (i - 3) * mm))
+                if x < 0 or y < 0 or x >= w or y >= h:
+                    agree_sq -= 2
+                    agree_rd -= 2
+                    continue
+                dark = 1 if flat[y * w + x] < thr else 0
+                if dark == (1 if FINDER_PATTERN[i][j] == "1" else 0):
+                    agree_sq += 1
+                d2 = (j - 3) ** 2 + (i - 3) ** 2
+                if d2 <= 3 or (8 <= d2 <= 13):
+                    want = 1
+                else:
+                    want = 0
+                if dark == want:
+                    agree_rd += 1
+        score = max(agree_sq, agree_rd) / 49.0
+        if score > best[0]:
+            best = (score, s)
+    return best
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _detect_by_finders(gray, thr):
+    """靠三个定位图案定出模块数与网格，再逐模块取中心点。找不到三个图案返回 None。"""
+    try:
+        pts = _finder_scan(gray, thr)
+    except Exception:
+        return None
+    if len(pts) < 3:
+        return None
+    groups = _cluster_finders(pts)
+    if len(groups) < 3:
+        return None
+
+    # 逐个核对图案形状：不吻合的直接丢掉（模糊后数据区凑出的假图案就是这么被清掉的）。
+    # 注意只把它当"过滤器"用，模块宽仍按 1:1:3:1:1 的扫描值算 ——
+    # 模板缩放会把模块宽带偏，进而把模块数算错一档（81 会变成 89）。
+    w, h = gray.size
+    flat = gray.tobytes()
+    checked = []
+    for g in groups:
+        score, s = _finder_shape(flat, w, h, g["x"], g["y"], g["m"], thr)
+        if score >= 0.70:
+            g = dict(g)
+            g["shape"] = score
+            g["m_tuned"] = g["m"] * s
+            checked.append(g)
+    if len(checked) < 3:
+        return None
+
+    triple = _pick_triple(checked)
+    if not triple:
+        return None
+    a, b, c = triple
+    return _finish_from_triple(gray, thr, a, b, c)
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _finish_from_triple(gray, thr, a, b, c):
+    """已知三个定位图案中心（左上、右上、左下）时，定模块数并采样整张码。"""
+    w, h = gray.size
+    # 两个图案中心之间是 n-7 个模块
+    span = (math.hypot(b["x"] - a["x"], b["y"] - a["y"]) +
+            math.hypot(c["x"] - a["x"], c["y"] - a["y"])) / 2.0
+    m_est = (a["m"] + b["m"] + c["m"]) / 3.0
+    if m_est < 1.0 or span < 8.0:
+        return None
+    n_est = span / m_est + 7.0
+    if n_est < 18:
+        return None
+    n = _nearest_size(int(round(n_est)))
+    if not _valid_n(n) or abs(n - n_est) > 1.3:
+        return None
+
+    module = span / float(n - 7)
+    if module < 1.0:
+        return None
+    side_i = int(round(module * n))
+    if side_i < 21:
+        return None
+
+    base_x = int(round(a["x"] - 3.5 * module))
+    base_y = int(round(a["y"] - 3.5 * module))
+    best = None
+    for ox in (-2, -1, 0, 1, 2):
+        for oy in (-2, -1, 0, 1, 2):
+            sq = Image.new("L", (side_i, side_i), 255)
+            sq.paste(gray.crop((base_x + ox, base_y + oy,
+                                base_x + ox + side_i, base_y + oy + side_i)), (0, 0))
+            bits, conf, purity = _sample_center(sq.tobytes(), side_i, n, thr)
+            fr = _finder_ratio(bits, n)
+            score = fr * 2.0 + purity * 4.0 + conf * 0.6
+            if best is None or score > best[0]:
+                best = (score, bits, conf, purity, fr, ox, oy)
+    score, bits, conf, purity, fr, ox, oy = best
+
+    # 仿射采样：三个定位中心直接解出"模块坐标 -> 像素坐标"，能吸收旋转与剪切。
+    # 只要仿射结果结构校验能过，就用它 —— 码被错切时，"整块方框"取网格必然错行，
+    # 分数再高也是错的。
+    aff = _sample_affine(gray, a, b, c, n, thr)
+    if aff is not None:
+        try:
+            aff_ok = validate_matrix(aff[1])[0]
+        except Exception:
+            aff_ok = False
+        if aff_ok or aff[0] > score:
+            score, bits, conf, purity, fr, _, _, _ = aff
+
+    return {
+        "n": n,
+        "bits": bits,
+        "bbox": (base_x + ox, base_y + oy, side_i),
+        "module_px": side_i / float(n),
+        "finder": fr,
+        "conf": conf,
+        "purity": purity,
+        "threshold": thr,
+        "_score": score,
+        "_by_finders": True,
+        "_shape": (a.get("shape", 0), b.get("shape", 0), c.get("shape", 0)),
+    }
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
 def _detect_core(gray):
-    """单极性识别：阈值 -> 暗区 bbox -> 候选模块数打分。失败抛 ValueError。"""
+    """单极性识别：阈值 -> 定位图案定网格（失败再退回暗区 bbox 打分）。失败抛 ValueError。"""
     thr = _threshold_estimate(gray)
     if thr is None:
         raise ValueError("图片几乎是纯色，找不到二维码的黑白模块")
+
+    # 先走定位图案：整张图里有标题、头像、说明文字时也不会把网格算歪
+    fdet = _detect_by_finders(gray, thr)
+    if fdet is not None and fdet["finder"] >= 0.85:
+        black = sum(sum(r) for r in fdet["bits"])
+        if 0 < black < fdet["n"] * fdet["n"]:
+            return fdet
 
     mask = gray.point(lambda v: 255 if v < thr else 0)
     bbox = mask.getbbox()
@@ -629,6 +1084,10 @@ def _detect_core(gray):
                 best = (score, n, conf, fr, purity, bits, sq, side, bb)
 
     if best is None:
+        if fdet is not None:
+            black = sum(sum(r) for r in fdet["bits"])
+            if 0 < black < fdet["n"] * fdet["n"]:
+                return fdet
         raise ValueError("无法确定二维码的模块数量，请换一张更清晰、正对拍摄的图片")
 
     score, n, conf, fr, purity, bits, sq, side, bb = best
@@ -646,6 +1105,10 @@ def _detect_core(gray):
     if black == 0 or black == n * n:
         raise ValueError("识别出的矩阵全是同一色，请换一张二维码图片")
 
+    # 定位图案路径往往更准（艺术化码上尤其明显），分数更高就用它
+    if fdet is not None and fdet["_score"] > score:
+        return fdet
+
     return {
         "n": n,
         "bits": bits,
@@ -660,38 +1123,196 @@ def _detect_core(gray):
 
 
 # ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def apply_function_patterns(bits, n):
+    """把"功能图案"按 QR 规范重写：三个定位图案、分隔符、时序图案、固定暗模块。
+    用于圆点式 / 圆形定位图案的艺术二维码：数据区照原图采，功能图案按规范补正，
+    这样矩阵既保留原码信息，又能通过结构校验、也能被任何扫码器正常识别。"""
+    out = [list(row) for row in bits]
+    for (r0, c0) in ((0, 0), (0, n - 7), (n - 7, 0)):
+        for i in range(7):
+            for j in range(7):
+                out[r0 + i][c0 + j] = 1 if FINDER_PATTERN[i][j] == "1" else 0
+    # 分隔符（定位图案外侧那一圈必须是白）
+    for c in range(0, min(n, 8)):
+        out[7][c] = 0
+    for r in range(0, min(n, 8)):
+        out[r][7] = 0
+    for c in range(n - 8, n):
+        out[7][c] = 0
+    for r in range(0, 8):
+        out[r][n - 8] = 0
+    for c in range(0, min(n, 8)):
+        out[n - 8][c] = 0
+    for r in range(n - 7, n):
+        out[r][7] = 0
+    # 时序图案（第 6 行 / 第 6 列 黑白交替）
+    for c in range(8, n - 8):
+        out[6][c] = 1 if c % 2 == 0 else 0
+    for r in range(8, n - 8):
+        out[r][6] = 1 if r % 2 == 0 else 0
+    # 右下固定暗模块
+    out[n - 8][8] = 1
+    return out
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _verified(det, expect):
+    """用真扫码引擎给候选矩阵投票：能把重绘图扫回来、且内容与源图一致才算过关。"""
+    black = sum(sum(r) for r in det["bits"])
+    if not (0 < black < det["n"] * det["n"]):
+        return False
+    if not SCANNER_OK:
+        return det.get("finder", 0.0) >= 0.85
+    try:
+        ok, contents, _ = scan_decode(render_qr(det["bits"], 6))
+    except Exception:
+        return False
+    if not ok or not contents:
+        return False
+    if expect is None:
+        return True
+    return texts_match(contents[0], expect)
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _rotate_variants(base):
+    """码被拍歪 / 轻度透视 / 小图 / 糊图时的补试顺序：先小角度旋转，再放大，再锐化。
+    旋转一律 expand=True：这张码贴着图片边缘，默认裁剪会把三个定位图案的边角切掉，
+    回正后就再也凑不齐 1:1:3:1:1 了。"""
+    yield base
+    for ang in (-4.0, 4.0, -8.0, 8.0, -12.0, 12.0):
+        yield base.rotate(ang, resample=Image.BICUBIC, fillcolor=255, expand=True)
+    up = base.resize((base.width * 2, base.height * 2), Image.LANCZOS)
+    yield up
+    # 轻透视：光轴没垂直对正时，整张码会横向错切（每行平移量不同）。
+    # 行方向的比例不受影响，但按"整块方框"取网格就会错行，所以先做反向错切再试。
+    # 画布要按最大平移量加宽，否则错切会把一侧的定位图案裁掉。
+    for sh in (3.0, -3.0, 6.0, -6.0):
+        s = sh / 100.0
+        pad = int(abs(s) * base.height) + 2
+        off = pad if s < 0 else 0
+        yield base.transform((base.width + pad, base.height), Image.AFFINE,
+                             (1, s, off, 0, 1, 0),
+                             resample=Image.BICUBIC, fillcolor=255)
+    yield base.filter(ImageFilter.UnsharpMask(radius=1.2, percent=140, threshold=2))
+    yield ImageOps.autocontrast(base)
+    yield up.filter(ImageFilter.UnsharpMask(radius=1.6, percent=160, threshold=3))
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
 def detect_qr_matrix(pil_img):
     """
-    从二维码图片中提取模块矩阵。黑底白码会自动反相后再试一次。
+    从二维码图片中提取模块矩阵。黑底白码会自动反相后再试一次；
+    第一轮不顺就按"小角度旋转 / 放大 / 锐化"补试，每个候选都用真扫码引擎验票。
     返回 dict: n, bits, bbox(x,y,side), module_px, finder, conf, inverted, threshold, size
     """
     rgb = _prepare(pil_img)
     base = rgb.convert("L")
 
-    first_error = None
-    result = None
-    best_key = None
-    for inverted in (False, True):
-        g = ImageOps.invert(base) if inverted else base
+    expect = None
+    if SCANNER_OK:
         try:
-            d = _detect_core(g)
-        except ValueError as e:
-            if first_error is None:
-                first_error = e
-            continue
-        d["inverted"] = inverted
-        key = d["_score"] - (0.15 if inverted else 0.0)
-        if result is None or key > best_key:
-            result = d
-            best_key = key
-        if not inverted and d["_score"] >= 7.4:
-            break  # 正常极性已是满分，不用再试反相
+            src_ok, src_list, _ = scan_decode(rgb)
+            if src_ok and src_list:
+                expect = src_list[0]
+        except Exception:
+            expect = None
 
-    if result is None:
+    first_error = None
+    best = None
+    for vi, g in enumerate(_rotate_variants(base)):
+        polarities = (False, True) if vi == 0 else (False,)
+        for inverted in polarities:
+            gi = ImageOps.invert(g) if inverted else g
+            cands = []
+            if vi == 0:
+                # 第一轮先只走定位图案路径（快）：艺术化码靠它，成功了就不用再跑贵路径
+                try:
+                    thr0 = _threshold_estimate(gi)
+                except Exception:
+                    thr0 = None
+                if thr0 is not None:
+                    fd0 = _detect_by_finders(gi, thr0)
+                    if fd0 is not None:
+                        fd0["inverted"] = inverted
+                        fd0 = _normalize_artistic(fd0, rgb)
+                        if _verified(fd0, expect):
+                            fd0["size"] = rgb.size
+                            fd0["_variant"] = vi
+                            return fd0
+                        cands.append(fd0)
+                # 定位图案没扫到或没过验票，再跑完整流程（含包围盒兜底）
+                try:
+                    cands.append(_detect_core(gi))
+                except ValueError as e:
+                    if first_error is None:
+                        first_error = e
+            else:
+                try:
+                    thr = _threshold_estimate(gi)
+                except Exception:
+                    thr = None
+                if thr is not None:
+                    fd = _detect_by_finders(gi, thr)
+                    if fd is not None:
+                        cands.append(fd)
+            for d in cands:
+                d["inverted"] = inverted
+                d = _normalize_artistic(d, rgb)
+                if _verified(d, expect):
+                    d["size"] = rgb.size
+                    d["_variant"] = vi
+                    return d
+                if best is None or d["_score"] > best[0]:
+                    best = (d["_score"], d)
+
+    if best is None:
         raise first_error or ValueError("无法识别这张图片里的二维码")
-
+    result = best[1]
+    result = _normalize_artistic(result, rgb)
     result["size"] = rgb.size
     return result
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def _normalize_artistic(det, pil_img):
+    """艺术化二维码（圆点模块 / 圆形定位图案 / 内嵌 logo）收尾：
+    功能图案不符合规范时按规范补正，并且必须"补正后仍能扫出与源图相同的内容"才采用，
+    否则保持原样，不掩盖真实问题。
+    源图本身扫不出内容时（例如小众的靶心式图案，扫码引擎不认），
+    改用"补正前后两次重绘的内容必须一致"来自证 —— 补正只动功能图案，数据区不变。"""
+    if det.get("finder", 0) >= 0.9:
+        return det
+    if not SCANNER_OK:
+        return det
+    expect = None
+    try:
+        src_ok, src_list, _ = scan_decode(pil_img)
+        if src_ok and src_list:
+            expect = src_list[0]
+    except Exception:
+        expect = None
+    if expect is None:
+        try:
+            raw_ok, raw_list, _ = scan_decode(render_qr(det["bits"], 6))
+            if raw_ok and raw_list:
+                expect = raw_list[0]
+        except Exception:
+            expect = None
+    if expect is None:
+        return det
+    bits = apply_function_patterns(det["bits"], det["n"])
+    try:
+        ok, contents, _ = scan_decode(render_qr(bits, 6))
+    except Exception:
+        return det
+    if ok and contents and texts_match(contents[0], expect):
+        det["_raw_finder"] = det.get("finder", 0.0)
+        det["bits"] = bits
+        det["finder"] = _finder_ratio(bits, det["n"])
+        det["artistic"] = True
+        det["content"] = expect
+    return det
 
 
 def _valid_n(n):
@@ -1034,7 +1655,22 @@ def parse_info(text, lang="zh_CN"):
 
 
 # ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
-# ================================================================ 界面
+# ================================================================ 字体 / 路径
+# 三平台各自的字体候选（按优先级排列，取第一个系统里存在的）
+UI_FONT_CANDIDATES = {
+    "windows": ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"],
+    "macos": ["PingFang SC", "Hiragino Sans GB", "Heiti SC", "Helvetica Neue"],
+    "linux": ["Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei",
+              "WenQuanYi Zen Hei", "DejaVu Sans"],
+}[PLATFORM]
+
+MONO_FONT_CANDIDATES = {
+    "windows": ["Consolas", "Cascadia Mono", "Courier New"],
+    "macos": ["Menlo", "Monaco", "SF Mono", "Courier New"],
+    "linux": ["DejaVu Sans Mono", "Noto Sans Mono", "Liberation Mono", "Courier New"],
+}[PLATFORM]
+
+
 def pick_font(root, candidates, fallback="TkDefaultFont"):
     fams = set()
     try:
@@ -1047,9 +1683,41 @@ def pick_font(root, candidates, fallback="TkDefaultFont"):
     return fallback
 
 
-def icon_path():
+def resource_path(name):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "app.ico")
+    return os.path.join(base, name)
+
+
+def icon_path():
+    """Windows 用 .ico；macOS / Linux 用 .png（iconbitmap 只认 ico）。"""
+    return resource_path("app.ico" if PLATFORM == "windows" else "app.png")
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def apply_window_icon(win):
+    """给窗口设置图标：Windows 走 iconbitmap，macOS / Linux 走 iconphoto。失败不影响启动。"""
+    ico = resource_path("app.ico")
+    png = resource_path("app.png")
+    if PLATFORM == "windows":
+        try:
+            if os.path.exists(ico):
+                win.iconbitmap(ico)
+                return
+        except Exception:
+            pass
+    try:
+        if os.path.exists(png):
+            img = tk.PhotoImage(file=png)
+            win.iconphoto(True, img)
+            win._icon_photo = img          # 必须持引用，否则会被回收
+            return
+    except Exception:
+        pass
+    try:
+        if os.path.exists(ico):
+            win.iconbitmap(ico)
+    except Exception:
+        pass
 
 
 class Slider(tk.Canvas):
@@ -1119,16 +1787,12 @@ class LanguageDialog(tk.Toplevel):
         tk.Toplevel.__init__(self, master)
         self.choice = current or "zh_CN"
         self.current = current
-        self.font = pick_font(self, ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"])
+        self.font = pick_font(self, UI_FONT_CANDIDATES)
 
         self.configure(bg=BG)
         self.title(t_("en", "lang_title"))
         self.resizable(False, False)
-        try:
-            if os.path.exists(icon_path()):
-                self.iconbitmap(icon_path())
-        except Exception:
-            pass
+        apply_window_icon(self)
         try:
             self.transient(master)
         except Exception:
@@ -1158,7 +1822,10 @@ class LanguageDialog(tk.Toplevel):
             self.attributes("-topmost", True)
         except Exception:
             pass
-        self.grab_set()
+        try:
+            self.grab_set()
+        except Exception:
+            pass
         try:
             self.focus_force()
         except Exception:
@@ -1189,8 +1856,8 @@ class App(object):
     def __init__(self, root, lang="zh_CN"):
         self.root = root
         self.lang = lang
-        self.ui_font = pick_font(root, ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"])
-        self.mono_font = pick_font(root, ["Consolas", "Cascadia Mono", "Courier New"], "TkFixedFont")
+        self.ui_font = pick_font(root, UI_FONT_CANDIDATES)
+        self.mono_font = pick_font(root, MONO_FONT_CANDIDATES, "TkFixedFont")
 
         self.left_img = None
         self.left_det = None
@@ -1223,11 +1890,7 @@ class App(object):
 
     # -------------------------------------------------------- 窗口骨架
     def _try_icon(self):
-        try:
-            if os.path.exists(icon_path()):
-                self.root.iconbitmap(icon_path())
-        except Exception:
-            pass
+        apply_window_icon(self.root)
 
     def _build_header(self):
         self.header = tk.Canvas(self.root, height=78, bg=BG, highlightthickness=0, bd=0)
@@ -1372,6 +2035,7 @@ class App(object):
                     accent=True).pack(side="left")
         self.button(actions, self.t("copy_bits"), lambda: self.copy_left(full=False)).pack(side="left", padx=8)
         self.button(actions, self.t("save_txt"), self.save_txt).pack(side="left")
+        self.button(actions, self.t("clear_left"), self.clear_left).pack(side="left", padx=8)
         self.button(actions, self.t("to_right"), self.push_to_right).pack(side="right")
 
     # -------------------------------------------------------- 右侧
@@ -1663,7 +2327,10 @@ class App(object):
                 else ("left_check_fail_both", {}, ERR)
         elif src_ok and src_text is not None and texts_match(contents[0], src_text):
             det["scan_code"] = "same_src"
-            self.left_check_state = ("left_check_same", {"c": short(src_text)}, OK)
+            if det.get("artistic"):
+                self.left_check_state = ("left_check_artistic", {"c": short(src_text)}, OK)
+            else:
+                self.left_check_state = ("left_check_same", {"c": short(src_text)}, OK)
         elif src_ok and src_text is not None:
             det["scan_code"] = "mismatch"
             self.left_check_state = ("left_check_mismatch", {}, ERR)
@@ -1716,6 +2383,20 @@ class App(object):
                     c.create_line(gx0, py, gx1, py, fill="#2ea8c0",
                                   width=1, stipple="gray12")
             c.create_rectangle(gx0, gy0, gx1, gy1, outline=ACCENT, width=2)
+
+    def clear_left(self):
+        """清空左侧：图片、识别结果、状态行、自检行、信息框一起回到初始态。"""
+        self.left_img = None
+        self.left_det = None
+        self.left_content = None
+        self.left_name = ""
+        self.left_check_state = None
+        self.left_check.configure(text="", fg=MUTED)
+        self.left_text.configure(fg=MUTED)
+        self.left_text.delete("1.0", "end")
+        self.left_text.insert("1.0", self.t("info_ph"))
+        self._set_status("left", self.t("waiting"), MUTED)
+        self._paint_left()
 
     def copy_left(self, full=True):
         if not self.left_det:
@@ -2058,12 +2739,46 @@ def _selftest(out_path):
 
 
 # ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
-def main():
+def _detect_report(img_path, out_path):
+    """诊断：识别一张图片里的二维码并写出结果。用法：程序 --detect <图片> <输出文件>"""
+    lines = []
     try:
-        from ctypes import windll
-        windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
-        pass
+        from PIL import Image
+        img = Image.open(img_path)
+        det = detect_qr_matrix(img)
+        ok_struct, probs, desc = validate_matrix(det["bits"])
+        ok_redraw, redraw, _ = scan_decode(render_qr(det["bits"], 6))
+        ok_src, src, _ = scan_decode(img)
+        same = ok_redraw and ok_src and texts_match(redraw[0], src[0])
+        lines.append("IMAGE=%s" % img_path)
+        lines.append("SIZE=%d x %d" % img.size)
+        lines.append("N=%d" % det["n"])
+        lines.append("MODULE_PX=%.3f" % det["module_px"])
+        lines.append("FINDER=%.4f" % det["finder"])
+        lines.append("PURITY=%.4f" % det["purity"])
+        lines.append("ARTISTIC=%s" % bool(det.get("artistic")))
+        lines.append("STRUCTURE_OK=%s problems=%s" % (ok_struct, probs))
+        lines.append("DESC=%s" % desc)
+        lines.append("REDRAW_DECODE=%s" % ok_redraw)
+        lines.append("SOURCE_DECODE=%s" % ok_src)
+        lines.append("MATCH=%s" % same)
+        if ok_src:
+            lines.append("SOURCE_CONTENT=%s" % src[0])
+    except Exception as e:
+        lines.append("EXCEPTION=%r" % (e,))
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+# ── 原创信息 · Original work by D_Chuan (c) 2026 ── 禁止商用 · 二创请保留本行 ──
+def main():
+    # 高 DPI 感知只有 Windows 需要；macOS 由系统统一按 Retina 缩放，Linux 交给桌面环境
+    if PLATFORM == "windows":
+        try:
+            from ctypes import windll
+            windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
 
     root = tk.Tk()
     root.withdraw()
@@ -2076,11 +2791,22 @@ def main():
     App(root, lang)
     root.deiconify()
     root.lift()
+    if PLATFORM == "macos":
+        # macOS 上新进程的窗口常被其他窗口压住，先置顶再解除，保证一启动就在前台
+        try:
+            root.attributes("-topmost", True)
+            root.after(400, lambda: root.attributes("-topmost", False))
+            root.focus_force()
+        except Exception:
+            pass
     root.mainloop()
 
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         _selftest(sys.argv[2])
+        sys.exit(0)
+    if len(sys.argv) >= 4 and sys.argv[1] == "--detect":
+        _detect_report(sys.argv[2], sys.argv[3])
         sys.exit(0)
     main()
